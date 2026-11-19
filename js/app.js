@@ -265,12 +265,12 @@ function cameraBox() {
 /** Ảnh tĩnh: nhìn toàn ảnh và phần giữa ảnh rồi lấy trung bình */
 const STILL_BOXES = [[0, 0, 1, 1], [0.1, 0.1, 0.9, 0.9], [0.2, 0.2, 0.8, 0.8]];
 
-function runModel(source, boxes) {
+async function runModel(source, boxes) {
   const t0 = performance.now();
   let res = null;
   if (settings.demo || !Classifier.ready) res = Classifier.demo();
   else {
-    try { res = Classifier.predict(source, boxes); }
+    try { res = await Classifier.predict(source, boxes); }
     catch (err) { console.error("Lỗi khi dự đoán:", err); }
   }
   $("lat").textContent = (performance.now() - t0).toFixed(0);
@@ -280,13 +280,19 @@ function lightHint(res) {
   return res.brightness < CONFIG.MIN_BRIGHTNESS ? "Khung hình quá tối. Hãy bật thêm đèn hoặc đưa vật ra chỗ sáng hơn." : null;
 }
 
-function classify() {
-  const res = runModel(video, cameraBox());
-  if (!res) return;
-  render(smooth(res.probs), lightHint(res));
+async function classify(id) {
+  if (state.busy) return;
+  state.busy = true;
+  try {
+    const res = await runModel(video, cameraBox());
+    if (!res || !state.running || id !== state.loopId) return;
+    render(smooth(res.probs), lightHint(res));
+  } finally {
+    state.busy = false;
+  }
 }
-function classifyStill(canvas) {
-  const res = runModel(canvas, STILL_BOXES);
+async function classifyStill(canvas) {
+  const res = await runModel(canvas, STILL_BOXES);
   if (!res) { toast("Không đọc được ảnh, hãy thử ảnh khác"); return; }
   state.buffer = [res.probs];
   renderStill(res.probs, lightHint(res));
@@ -294,11 +300,11 @@ function classifyStill(canvas) {
 
 function loop(ts, id) {
   if (!state.running || id !== state.loopId) return;
-  if (ts - state.lastRun >= INTERVAL_MS && video.readyState >= 2 && video.videoWidth > 0) {
+  if (!state.busy && ts - state.lastRun >= INTERVAL_MS && video.readyState >= 2 && video.videoWidth > 0) {
     state.lastRun = ts;
     if (state.lastFrame) $("fps").textContent = (1000 / (ts - state.lastFrame)).toFixed(1);
     state.lastFrame = ts;
-    classify();
+    classify(id);
   }
   requestAnimationFrame(t => loop(t, id));
 }
