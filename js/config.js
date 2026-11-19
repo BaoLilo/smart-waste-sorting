@@ -13,16 +13,21 @@ const CONFIG = {
 
   INTERVAL_MS: 150,    // khoảng cách giữa 2 lần dự đoán
   SMOOTH: 5,           // số khung dùng để làm mượt kết quả
-  STABLE_FRAMES: 6     // số khung liên tiếp giống nhau để ghi nhận (~1 giây)
+  STABLE_FRAMES: 6,    // số khung liên tiếp giống nhau để ghi nhận (~1 giây)
+
+  DEFAULT_THRESHOLD: 70, // ngưỡng tin cậy mặc định (%)
+  MIN_MARGIN: 0.2,       // loại cao nhất phải hơn loại thứ hai ít nhất 20 điểm %
+  MIN_BRIGHTNESS: 45,    // dưới mức này (0..255) coi là thiếu sáng
+  CROP_INSET: 0.12       // cắt bỏ 12% mỗi cạnh khung hình (vùng quanh khung ngắm) khi dùng camera
 };
 
 /* Thông tin hiển thị cho từng loại rác */
 const INFO = {
   cardboard: {
-    vi: "Giấy & Carton", color: "#2F6FDE",
+    vi: "Bìa carton", color: "#2F6FDE",
     bin: "Thùng giấy / carton tái chế. Gấp phẳng, giữ khô ráo.",
-    examples: "Thùng giao hàng, hộp bìa cứng, giấy in, báo",
-    tip: "Tháo băng keo, giữ khô ráo và không bỏ giấy dính dầu mỡ."
+    examples: "Thùng giao hàng, hộp bìa cứng, hộp giấy carton",
+    tip: "Tháo băng keo, gấp phẳng và không bỏ carton dính dầu mỡ."
   },
   glass: {
     vi: "Thủy tinh", color: "#1F8A70",
@@ -37,10 +42,10 @@ const INFO = {
     tip: "Tráng nhanh với nước để tránh mùi và côn trùng."
   },
   paper: {
-    vi: "Giấy & Carton", color: "#2F6FDE",
+    vi: "Giấy", color: "#4A86E8",
     bin: "Thùng giấy / carton tái chế. Gấp phẳng, giữ khô ráo.",
-    examples: "Thùng giao hàng, hộp bìa cứng, giấy in, báo",
-    tip: "Tháo băng keo, giữ khô ráo và không bỏ giấy dính dầu mỡ."
+    examples: "Giấy in, báo, tạp chí, vở cũ, tờ rơi",
+    tip: "Giữ khô ráo, không bỏ giấy ướt hoặc dính dầu mỡ."
   },
   plastic: {
     vi: "Nhựa", color: "#B8860B",

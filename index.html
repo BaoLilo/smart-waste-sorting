@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/style.css">
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs/dist/tf.min.js"></script></head>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script></head>
 <body>
 
 <header class="top">
@@ -61,8 +61,8 @@
     <details class="settings">
       <summary>Cài đặt</summary>
       <div class="set-grid">
-        <label class="slider">Ngưỡng tin cậy: <b id="thVal">60%</b>
-          <input type="range" id="threshold" min="30" max="95" step="5" value="60">
+        <label class="slider">Ngưỡng tin cậy: <b id="thVal">70%</b>
+          <input type="range" id="threshold" min="30" max="95" step="5" value="70">
         </label>
         <label class="check"><input type="checkbox" id="mirror"> Lật gương camera</label>
         <label class="check"><input type="checkbox" id="speak"> Đọc to kết quả</label>
@@ -118,9 +118,9 @@
   <h2 class="page-title">Hệ thống hoạt động thế nào?</h2>
   <ol class="flow">
     <li><b>Camera</b><span>Trình duyệt lấy luồng video bằng <code>getUserMedia</code>.</span></li>
-    <li><b>Tiền xử lý</b><span>Mỗi khung hình được thu về 224×224 và chuẩn hóa giá trị điểm ảnh.</span></li>
+    <li><b>Tiền xử lý</b><span>Vùng quanh khung ngắm được cắt ra, thu về 224×224 và chuẩn hóa giá trị điểm ảnh. Mỗi khung được dự đoán cả bản gốc lẫn bản lật ngang rồi lấy trung bình.</span></li>
     <li><b>MobileNetV2</b><span>Mô hình đã huấn luyện trên TrashNet chạy bằng TensorFlow.js ngay trong máy.</span></li>
-    <li><b>Kết quả</b><span>Kết quả 5 khung gần nhất được lấy trung bình, giữ yên khoảng 1 giây thì ghi vào lịch sử.</span></li>
+    <li><b>Kết quả</b><span>Kết quả 5 khung gần nhất được lấy trung bình. Chỉ chốt khi loại cao nhất vượt ngưỡng tin cậy và bỏ xa loại thứ hai; giữ yên khoảng 1 giây thì ghi vào lịch sử.</span></li>
   </ol>
   <div class="card about-card">
     <h2>Thông tin kỹ thuật</h2>

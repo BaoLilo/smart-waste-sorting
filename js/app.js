@@ -3,13 +3,13 @@
    =================================================================== */
 const $ = id => document.getElementById(id);
 const { CLASSES, SMOOTH, STABLE_FRAMES, INTERVAL_MS } = CONFIG;
-const CONFIDENCE_THRESHOLD = 0.7;
 const HISTORY_SIZE = 5;
+const UNSURE = "__unsure__";
 
 const video = $("video"), photo = $("photo"), stage = $("stage");
 const state = {
   stream: null, running: false, facing: "environment",
-  lastRun: 0, lastFrame: 0,
+  lastRun: 0, lastFrame: 0, loopId: 0, busy: false,
   buffer: [],
   predictionHistory: [],
   stableLabel: null, stableCount: 0, locked: false,
@@ -22,8 +22,12 @@ const store = {
   get(k, d) { try { const v = localStorage.getItem("sws_" + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem("sws_" + k, JSON.stringify(v)); } catch {} }
 };
+function clampThreshold(v) {
+  v = Number(v);
+  return Number.isFinite(v) ? Math.min(95, Math.max(30, Math.round(v / 5) * 5)) : CONFIG.DEFAULT_THRESHOLD;
+}
 const settings = {
-  threshold: store.get("threshold", 60),
+  threshold: clampThreshold(store.get("threshold_v2", CONFIG.DEFAULT_THRESHOLD)),
   mirror: store.get("mirror", false),
   speak: store.get("speak", false),
   demo: false,
@@ -90,13 +94,16 @@ async function startCamera() {
       video: { facingMode: state.facing, width: { ideal: 960 }, height: { ideal: 720 } }, audio: false
     });
     video.srcObject = state.stream; await video.play();
+    state.buffer = [];
     photo.hidden = true; video.hidden = false; $("empty").hidden = true;
     state.running = true; stage.classList.add("running");
     $("startBtn").disabled = true; $("stopBtn").disabled = false; $("flipBtn").disabled = false;
     resetPredictionHistory();
     resetStable();
-    requestAnimationFrame(loop);
+    const id = ++state.loopId;
+    requestAnimationFrame(ts => loop(ts, id));
   } catch (err) {
+    stopCamera();
     $("empty").hidden = false;
     $("empty").textContent = err.name === "NotAllowedError"
       ? "Trình duyệt đang chặn camera. Hãy cho phép camera trong thanh địa chỉ rồi thử lại."
@@ -104,7 +111,7 @@ async function startCamera() {
   }
 }
 function stopCamera() {
-  state.running = false; stage.classList.remove("running");
+  state.running = false; state.loopId++; stage.classList.remove("running");
   resetPredictionHistory();
   if (state.stream) { state.stream.getTracks().forEach(t => t.stop()); state.stream = null; }
   video.hidden = true;
@@ -122,25 +129,32 @@ function smooth(p) {
   return CLASSES.map((_, i) => state.buffer.reduce((a, b) => a + b[i], 0) / state.buffer.length);
 }
 function getSmoothResult(historyArray) {
-  if (historyArray.length === 0) return null;
+  if (historyArray.length < Math.ceil(HISTORY_SIZE / 2)) return null;
   const counts = {};
-  let maxCount = 0;
-  let mostFrequent = null;
-
+  let maxCount = 0, mostFrequent = null;
   for (const item of historyArray) {
     counts[item] = (counts[item] || 0) + 1;
-    if (counts[item] > maxCount) {
-      maxCount = counts[item];
-      mostFrequent = item;
-    }
+    if (counts[item] > maxCount) { maxCount = counts[item]; mostFrequent = item; }
   }
-  return maxCount >= Math.ceil(HISTORY_SIZE / 2) ? mostFrequent : null;
+  return maxCount >= Math.ceil(HISTORY_SIZE / 2) && mostFrequent !== UNSURE ? mostFrequent : null;
 }
 function resetPredictionHistory() {
   state.predictionHistory = [];
 }
-function meetsConfidenceThreshold(probability) {
-  return probability >= Math.max(CONFIDENCE_THRESHOLD, settings.threshold / 100);
+/** Sắp xếp xác suất: trả về chỉ số loại cao nhất, xác suất cao nhất và khoảng cách với loại thứ hai */
+function topOf(p) {
+  let best = 0, second = -1;
+  p.forEach((v, i) => {
+    if (v > p[best]) { second = best; best = i; }
+    else if (i !== best && (second < 0 || v > p[second])) second = i;
+  });
+  const top = p[best], margin = top - (second >= 0 ? p[second] : 0);
+  return { best, top, margin };
+}
+/** Đủ chắc chắn khi: vượt ngưỡng tin cậy VÀ bỏ xa loại đứng thứ hai */
+function isConfident(p) {
+  const { top, margin } = topOf(p);
+  return top >= settings.threshold / 100 && margin >= CONFIG.MIN_MARGIN;
 }
 function resetStable() {
   state.stableLabel = null; state.stableCount = 0; state.locked = false;
@@ -148,35 +162,48 @@ function resetStable() {
   document.querySelector(".reticle").classList.remove("locked");
 }
 
-function render(p) {
-  let best = 0; p.forEach((v, i) => { if (v > p[best]) best = i; });
+function renderBars(p) {
   CLASSES.forEach((c, i) => {
     $("f-" + c).style.width = (p[i] * 100).toFixed(0) + "%";
     $("p-" + c).textContent = (p[i] * 100).toFixed(0) + "%";
   });
+}
+function showUnsure(p, hint) {
+  const { best, top } = topOf(p);
+  $("result").style.setProperty("--bin", "#6b7b79");
+  $("rName").textContent = "Chưa chắc chắn";
+  $("rBin").textContent = hint || "Đưa vật vào giữa khung, lại gần hơn, giữ yên và đảm bảo đủ sáng.";
+  $("rConf").textContent = `Cao nhất: ${(top * 100).toFixed(0)}% (${INFO[CLASSES[best]].vi})`;
+}
+function showResult(label, conf) {
+  const info = INFO[label];
+  $("result").style.setProperty("--bin", info.color);
+  $("rName").textContent = info.vi;
+  $("rBin").textContent = info.bin;
+  $("rConf").textContent = "Độ tin cậy: " + (conf * 100).toFixed(1) + "%";
+}
 
-  const maxProb = p[best];
-  const currentLabel = meetsConfidenceThreshold(maxProb) ? CLASSES[best] : "Chưa rõ";
-  state.predictionHistory.push(currentLabel);
+/** Camera: kết quả phải ổn định qua nhiều khung mới được chốt */
+function render(p, hint) {
+  renderBars(p);
+  const { best } = topOf(p);
+  state.predictionHistory.push(!hint && isConfident(p) ? CLASSES[best] : UNSURE);
   if (state.predictionHistory.length > HISTORY_SIZE) state.predictionHistory.shift();
 
   const finalResult = getSmoothResult(state.predictionHistory);
-  const c = CLASSES[best], conf = maxProb, r = $("result");
-  if (!finalResult || finalResult === "Chưa rõ") {
-    r.style.setProperty("--bin", "#6b7b79");
-    $("rName").textContent = "Chưa chắc chắn";
-    $("rBin").textContent = "Đưa vật lại gần hơn, giữ yên và đảm bảo đủ sáng.";
-    $("rConf").textContent = `Cao nhất: ${(conf * 100).toFixed(0)}% (${INFO[c].vi})`;
-    resetStable();
-    return;
-  }
-  const finalInfo = INFO[finalResult];
-  r.style.setProperty("--bin", finalInfo.color);
-  $("rName").textContent = finalInfo.vi;
-  $("rBin").textContent = finalInfo.bin;
-  $("rConf").textContent = "Độ tin cậy: " + (conf * 100).toFixed(1) + "%";
-  console.log("Kết quả chốt:", finalResult, "- Xác suất:", maxProb.toFixed(2));
+  if (!finalResult) { showUnsure(p, hint); resetStable(); return; }
+  const conf = p[CLASSES.indexOf(finalResult)];
+  showResult(finalResult, conf);
   trackStable(finalResult, conf);
+}
+
+/** Ảnh tải lên: chỉ có 1 khung nên quyết định ngay */
+function renderStill(p, hint) {
+  renderBars(p);
+  if (hint || !isConfident(p)) { showUnsure(p, hint || "Ảnh chưa đủ rõ. Hãy chụp vật ở giữa ảnh, nền đơn giản và đủ sáng."); return; }
+  const { best, top } = topOf(p);
+  showResult(CLASSES[best], top);
+  confirmItem(CLASSES[best], top);
 }
 
 /* Giữ yên cùng một loại đủ lâu thì mới ghi nhận */
@@ -224,22 +251,56 @@ function renderHistory() {
     <span>${(h.conf * 100).toFixed(0)}% · ${h.time.toLocaleTimeString("vi-VN")}</span></li>`).join("");
 }
 
-function classify(source) {
+/** Vùng cắt quanh khung ngắm, tính theo đúng phần video đang hiển thị (object-fit: cover) */
+function cameraBox() {
+  const vw = video.videoWidth, vh = video.videoHeight;
+  const sw = stage.clientWidth || vw, sh = stage.clientHeight || vh;
+  const scale = Math.max(sw / vw, sh / vh);
+  const visW = Math.min(1, sw / scale / vw), visH = Math.min(1, sh / scale / vh);
+  const inset = CONFIG.CROP_INSET;
+  const x1 = (1 - visW) / 2 + visW * inset, x2 = 1 - x1;
+  const y1 = (1 - visH) / 2 + visH * inset, y2 = 1 - y1;
+  return [[y1, x1, y2, x2]];
+}
+/** Ảnh tĩnh: nhìn toàn ảnh và phần giữa ảnh rồi lấy trung bình */
+const STILL_BOXES = [[0, 0, 1, 1], [0.1, 0.1, 0.9, 0.9], [0.2, 0.2, 0.8, 0.8]];
+
+function runModel(source, boxes) {
   const t0 = performance.now();
-  const raw = (settings.demo || !Classifier.ready) ? Classifier.demo() : Classifier.predict(source);
+  let res = null;
+  if (settings.demo || !Classifier.ready) res = Classifier.demo();
+  else {
+    try { res = Classifier.predict(source, boxes); }
+    catch (err) { console.error("Lỗi khi dự đoán:", err); }
+  }
   $("lat").textContent = (performance.now() - t0).toFixed(0);
-  render(smooth(raw));
+  return res;
+}
+function lightHint(res) {
+  return res.brightness < CONFIG.MIN_BRIGHTNESS ? "Khung hình quá tối. Hãy bật thêm đèn hoặc đưa vật ra chỗ sáng hơn." : null;
 }
 
-function loop(ts) {
-  if (!state.running) return;
-  if (ts - state.lastRun >= INTERVAL_MS && video.readyState >= 2) {
+function classify() {
+  const res = runModel(video, cameraBox());
+  if (!res) return;
+  render(smooth(res.probs), lightHint(res));
+}
+function classifyStill(canvas) {
+  const res = runModel(canvas, STILL_BOXES);
+  if (!res) { toast("Không đọc được ảnh, hãy thử ảnh khác"); return; }
+  state.buffer = [res.probs];
+  renderStill(res.probs, lightHint(res));
+}
+
+function loop(ts, id) {
+  if (!state.running || id !== state.loopId) return;
+  if (ts - state.lastRun >= INTERVAL_MS && video.readyState >= 2 && video.videoWidth > 0) {
     state.lastRun = ts;
     if (state.lastFrame) $("fps").textContent = (1000 / (ts - state.lastFrame)).toFixed(1);
     state.lastFrame = ts;
-    classify(video);
+    classify();
   }
-  requestAnimationFrame(loop);
+  requestAnimationFrame(t => loop(t, id));
 }
 
 /* ---------- Sự kiện ---------- */
@@ -256,19 +317,18 @@ $("file").onchange = e => {
     photo.getContext("2d").drawImage(img, 0, 0);
     photo.hidden = false; $("empty").hidden = true;
     state.buffer = []; resetPredictionHistory(); resetStable();
-    classify(photo);
-    // Ảnh tĩnh: ghi nhận ngay, không cần giữ yên
-    const p = state.buffer[0]; let b = 0; p.forEach((v, i) => { if (v > p[b]) b = i; });
-    if (meetsConfidenceThreshold(p[b])) confirmItem(CLASSES[b], p[b]);
     URL.revokeObjectURL(img.src);
+    // Ảnh tĩnh: ghi nhận ngay, không cần giữ yên
+    classifyStill(photo);
   };
+  img.onerror = () => { URL.revokeObjectURL(img.src); toast("Không mở được ảnh này"); };
   img.src = URL.createObjectURL(f); e.target.value = "";
 };
 $("fileLabel").onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("file").click(); } };
 
 $("threshold").oninput = e => {
-  settings.threshold = +e.target.value; $("thVal").textContent = settings.threshold + "%";
-  store.set("threshold", settings.threshold);
+  settings.threshold = clampThreshold(e.target.value); $("thVal").textContent = settings.threshold + "%";
+  store.set("threshold_v2", settings.threshold);
 };
 $("mirror").onchange = e => { settings.mirror = e.target.checked; stage.classList.toggle("mirror", settings.mirror); store.set("mirror", settings.mirror); };
 $("speak").onchange = e => { settings.speak = e.target.checked; store.set("speak", settings.speak); };
@@ -291,7 +351,8 @@ $("csvBtn").onclick = () => {
     state.history.slice().reverse().map(h => `${h.time.toISOString()},${h.label},${h.conf.toFixed(4)}`));
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([rows.join("\n")], { type: "text/csv" }));
-  a.download = "lich-su-phan-loai.csv"; a.click(); URL.revokeObjectURL(a.href);
+  a.download = "lich-su-phan-loai.csv"; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 };
 
 document.addEventListener("keydown", e => {
